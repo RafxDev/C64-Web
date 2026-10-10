@@ -1,0 +1,30 @@
+# Archivos de directrices y reglas del asistente
+C64_SPEC_RULES.md
+
+# Dependencias
+node_modules/
+
+# Compilación y producción
+dist/
+dist-ssr/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Entorno y sistema
+.env
+.env.local
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

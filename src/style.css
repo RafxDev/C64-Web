@@ -1,0 +1,154 @@
+:root {
+  --c64-black: #000000;
+  --c64-white: #ffffff;
+  --c64-red: #880000;
+  --c64-cyan: #aaffee;
+  --c64-purple: #cc44cc;
+  --c64-green: #00cc55;
+  --c64-blue: #0000aa;
+  --c64-yellow: #eeee77;
+  --c64-orange: #dd8855;
+  --c64-brown: #664400;
+  --c64-lightred: #ff7777;
+  --c64-darkgrey: #333333;
+  --c64-grey: #777777;
+  --c64-lightgreen: #aaff66;
+  --c64-lightblue: #0088ff;
+  --c64-lightgrey: #bbbbbb;
+
+  --bg-color: #121317;
+  --ui-panel: #1b1d24;
+  --ui-border: #2c2f3b;
+  --ui-text: #e2e8f0;
+  --accent: #5577ff;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--bg-color);
+  color: var(--ui-text);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  user-select: none;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+}
+
+.c64-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 1rem;
+  background-color: var(--ui-panel);
+  border-bottom: 1px solid var(--ui-border);
+  height: 48px;
+  flex-shrink: 0;
+}
+
+.logo {
+  font-weight: 800;
+  letter-spacing: 1.5px;
+  color: #7094ff;
+  font-size: 0.95rem;
+}
+
+.menu-bar {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.btn {
+  background-color: #272a36;
+  color: #c9d1d9;
+  border: 1px solid #3c4254;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn:hover {
+  background-color: #383d4f;
+  color: #ffffff;
+  border-color: #5577ff;
+}
+
+.metrics {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.8rem;
+  color: #8b949e;
+  font-family: monospace;
+}
+
+.metrics strong {
+  color: #58a6ff;
+}
+
+.viewport-container {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #0b0c10;
+  padding: 1rem;
+  overflow: hidden;
+}
+
+.canvas-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7), 0 0 1px 1px rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  background-color: #000;
+}
+
+#c64-screen {
+  display: block;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: -webkit-crisp-edges;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  width: 768px; /* 384 x 2 */
+  height: 544px; /* 272 x 2 */
+  max-width: 90vw;
+  max-height: calc(100vh - 120px);
+  aspect-ratio: 384 / 272;
+}
+
+.c64-bottombar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.35rem 1rem;
+  background-color: var(--ui-panel);
+  border-top: 1px solid var(--ui-border);
+  font-size: 0.75rem;
+  color: #8b949e;
+  font-family: monospace;
+  height: 32px;
+  flex-shrink: 0;
+}
+
+#status-banking span {
+  color: #7ee787;
+}
+
+.tip {
+  color: #6e7681;
+}

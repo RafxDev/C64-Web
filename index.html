@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Commodore 64 Web Emulator</title>
+  <link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+  <div id="app">
+    <header class="c64-topbar">
+      <div class="logo">COMMODORE 64</div>
+      <nav class="menu-bar">
+        <button id="btn-power" class="btn" title="Reiniciar emulador">Reiniciar</button>
+        <button id="btn-pause" class="btn" title="Pausar / Reanudar">Pausar</button>
+        <button id="btn-debug" class="btn" title="Mostrar/Ocultar depurador">Debug</button>
+      </nav>
+      <div id="status-metrics" class="metrics">
+        <span>FPS: <strong id="val-fps">0</strong></span>
+        <span>Ciclos/f: <strong id="val-cycles">0</strong></span>
+        <span>PAL: <strong>50.12 Hz</strong></span>
+      </div>
+    </header>
+
+    <main class="viewport-container">
+      <div class="canvas-wrapper">
+        <canvas id="c64-screen" width="384" height="272"></canvas>
+      </div>
+    </main>
+
+    <footer class="c64-bottombar">
+      <div id="status-banking">Banking: $0001 = <span id="val-banking-bits">%00110111</span></div>
+      <div class="tip">PAL 384×272 | Pixel Perfect 16 Colores VIC-II</div>
+    </footer>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
