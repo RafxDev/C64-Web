@@ -1,204 +1,327 @@
 # DIARIO DE DESARROLLO - EMULADOR COMMODORE 64 WEB
 
-Este diario documenta cada decisión técnica, arquitectura, cálculos matemáticos de temporización y avances en el desarrollo del emulador Commodore 64 para la web.
+Este documento constituye la bitácora técnica exhaustiva y el registro oficial de ingeniería del emulador Commodore 64 para la web. Detalla cada fase de diseño, modelado matemático de ciclos, esquemas de circuitos, mapas de memoria, máquinas de estado y decisiones de implementación a bajo nivel.
 
 ---
 
 ## 📅 Módulo 1: Cimientos del Sistema (Duración de desarrollo: 17 días)
 
-### 1. Resumen Ejecutivo
-Se ha establecido con éxito la base arquitectónica y de infraestructura para el emulador C64 web. El sistema compila limpiamente con TypeScript estricto, cuenta con empaquetado optimizado con Vite, renderizado pixelado en Canvas 2D a resolución nativa PAL (384×272), sincronización temporal precisa de 50.12 Hz (19,656 ciclos por cuadro) y el bus de memoria con la lógica completa del Programmable Logic Array (PLA) y los registros de puerto de la CPU 6510 ($0000/$0001).
+### 1. Resumen Ejecutivo y Metodología
+El objetivo del Módulo 1 fue erigir la base arquitectónica sobre la cual operan todos los circuitos integrados emulados. Se rechazó cualquier enfoque de simulación de alto nivel o interpretación de comandos en favor de un modelo de hardware desacoplado y estrictamente tipado en **TypeScript**, empaquetado con **Vite**, renderizado en **Canvas 2D** a resolución nativa PAL (384×272 píxeles con bordes) y sincronizado mediante un acumulador de deuda temporal a **50.1245 Hz** (~19,656 ciclos de reloj por fotograma).
+
+```mermaid
+flowchart TD
+    subgraph HostSystem ["Navegador Web / Host"]
+        RAF["requestAnimationFrame (60Hz / 120Hz / 144Hz)"]
+        Canvas["Canvas 2D Context (384x272 px)"]
+        Audio["Web Audio API Context"]
+    end
+
+    subgraph C64Engine ["Motor Central Commodore 64"]
+        Clock["C64Clock (Acumulador Delta 50.12 Hz)"]
+        Bus["MemoryBus & PLA MMU (64 KB RAM + ROMs)"]
+        CPU["CPU MOS 6510 (0.985 MHz)"]
+        VIC["VIC-II MOS 6569 (Video PAL)"]
+        CIA1["CIA 1 MOS 6526 (Teclado/Timers)"]
+        CIA2["CIA 2 MOS 6526 (Bancos VIC/NMI)"]
+        SID["SID MOS 6581 (Sonido)"]
+        Screen["C64Screen (Framebuffer Uint32)"]
+    end
+
+    RAF --> Clock
+    Clock -->|"Slices de 19,656 ciclos"| CPU
+    CPU <-->|"Direcciones / Datos / R/W"| Bus
+    Bus <-->|"Espacio I/O $D000-$DFFF"| VIC
+    Bus <-->|"Espacio I/O $D000-$DFFF"| SID
+    Bus <-->|"Espacio I/O $D000-$DFFF"| CIA1
+    Bus <-->|"Espacio I/O $D000-$DFFF"| CIA2
+    CIA2 -->|"Líneas VA14/VA15 (Bancos VIC)"| Bus
+    VIC -->|"Framebuffer RGBA32"| Screen
+    Screen --> Canvas
+```
 
 ---
 
-### 2. Estructura Modular Implementada
-El código se ha organizado de forma desacoplada reflejando fielmente la arquitectura de hardware del Commodore 64:
+### 2. Estructura Modular y Desacoplamiento de Hardware
+El diseño separa cada microchip en un módulo con responsabilidades aisladas, imitando los chips montados en la placa base:
 
 ```
 src/
-├── cpu/             # Definiciones de registros, banderas e interfaz de la CPU MOS 6510
-│   ├── types.ts
-│   └── cpu6510.ts   # Núcleo completo del 6502/6510 con 151 instrucciones
-├── memory/          # 64 KB RAM física, buffers ROM, MMU y lógica PLA
-│   ├── types.ts
-│   └── memory_bus.ts
-├── io/              # Enrutamiento de periféricos mapeados en $D000 - $DFFF y teclado
-│   ├── io_bus.ts
-│   └── keyboard.ts  # Gestor de matriz de teclado 8x8 PETSCII y eventos web
-├── vic/             # Chip de video VIC-II (MOS 6569 PAL)
-│   ├── constants.ts # Constantes de temporización PAL (63 ciclos/línea, 312 líneas)
-│   ├── palette.ts   # Paleta Pepto oficial de 16 colores (RGBA y Uint32 precalculados)
-│   ├── types.ts
-│   └── vic2.ts      # Registros $D000-$D02E, barrido de haz raster y búfer de 384x272
-├── cia/             # Chips de interfaz compleja CIA 6526 (x2)
-│   ├── types.ts
-│   ├── cia1.ts      # CIA 1 ($DC00): Teclado, joysticks, timers, IRQ
-│   └── cia2.ts      # CIA 2 ($DD00): Selección de banco VIC-II (VA14/VA15), IEC, NMI
-├── sid/             # Chip de sonido SID (MOS 6581 / 8580 - $D400-$D7FF)
-│   ├── types.ts
-│   └── sid.ts
-├── ui/              # Renderizado en Canvas 2D de ultra-alta velocidad
-│   └── screen.ts
-├── system/          # Integración de hardware y bucle de temporización
-│   ├── clock.ts     # Temporizador con acumulador delta y protección de deriva
-│   └── c64.ts       # Orquestador del sistema
-├── style.css        # Estilos visuales de la interfaz de usuario
-└── main.ts          # Inicialización y enlace con el DOM
+├── cpu/             # MOS 6510: Registros, decodificador de 151 opcodes y bus de ciclo
+│   ├── types.ts     # Interfaces de CPU y registro de banderas P (NV-BDIZC)
+│   └── cpu6510.ts   # Implementación del microprocesador con timing de ciclos
+├── memory/          # MMU y lógica de conmutación PLA
+│   ├── types.ts     # Interfaz IMemoryBus e IIODevice
+│   └── memory_bus.ts# 64 KB RAM física, superposición de ROMs y transparencia de escritura
+├── io/              # Dispositivos de interfaz y enrutamiento
+│   ├── io_bus.ts    # Enrutador del espacio $D000 - $DFFF
+│   └── keyboard.ts  # Matriz de teclado PETSCII y mapeo web
+├── vic/             # MOS 6569 VIC-II: Video PAL
+│   ├── constants.ts # Temporización: 63 ciclos/línea, 312 líneas = 19,656 ciclos
+│   ├── palette.ts   # Paleta Pepto de 16 colores en formato Uint32 empaquetado
+│   ├── types.ts     # Interfaz del controlador de video
+│   └── vic2.ts      # Barrido raster, registros $D000-$D02E y buffer 384x272
+├── cia/             # MOS 6526 CIA dual
+│   ├── types.ts     # Interfaz base de CIAs
+│   ├── cia1.ts      # CIA 1: Matriz de teclado, Joystick, Timers A/B, IRQ
+│   └── cia2.ts      # CIA 2: Selección de banco VIC-II, NMI
+├── sid/             # MOS 6581 / 8580 SID: Síntesis de sonido
+│   ├── types.ts     # Interfaz de registros de audio
+│   └── sid.ts       # Registros $D400 - $D7FF
+├── ui/              # Renderizado gráfico
+│   └── screen.ts    # Gestión de Canvas2D y volcado directo ImageData
+├── system/          # Coordinación y sincronización
+│   ├── clock.ts     # Motor de tiempo real con control de deriva
+│   └── c64.ts       # Orquestador del sistema de hardware
+├── style.css        # Marco visual con borde CRT y escalado pixelado
+└── main.ts          # Inicializador y enlace con el DOM
 ```
 
 ---
 
-### 3. Fórmulas Matemáticas y Temporización PAL (50 Hz)
-El Commodore 64 en su especificación europea (PAL-B) se sincroniza con las siguientes constantes exactas:
+### 3. Temporización PAL (50 Hz) y Algoritmo de Ciclos
+El modelo PAL del Commodore 64 opera a una frecuencia exacta derivada del cristal maestro de color:
+
 - **Frecuencia del reloj maestro de la CPU:**
   $$f_{\text{cpu}} = 985,248\text{ Hz} \quad (0.985248\text{ MHz})$$
-- **Líneas de barrido raster por cuadro:**
+- **Líneas de barrido raster por cuadro (total):**
   $$L = 312\text{ líneas}$$
-- **Ciclos de reloj por línea raster:**
+- **Ciclos de reloj por cada línea de barrido:**
   $$C_{\text{line}} = 63\text{ ciclos/línea}$$
-- **Ciclos totales por cuadro (frame):**
-  $$C_{\text{frame}} = L \times C_{\text{line}} = 312 \times 63 = 19,656\text{ ciclos}$$
+- **Ciclos totales por cuadro completo:**
+  $$C_{\text{frame}} = 312 \times 63 = 19,656\text{ ciclos/cuadro}$$
 - **Frecuencia vertical real:**
   $$f_v = \frac{985,248}{19,656} \approx 50.1245\text{ Hz}$$
 
-#### Algoritmo del Motor de Reloj (`C64Clock`):
-1. Mide el tiempo transcurrido en milisegundos con `performance.now()`.
-2. Aplica un límite de seguridad ($\Delta t_{\text{max}} = 50\text{ ms}$) para evitar la sobrecarga ("espiral de la muerte") en caso de que la pestaña del navegador pierda el foco.
-3. Acumula la deuda de ciclos:
-   $$\text{Ciclos acumulados} += \frac{\Delta t}{1000} \times 985,248$$
-4. Ejecuta los ciclos enteros acumulados en los subsistemas emulados y descuenta la deuda.
-5. Emite métricas en tiempo real (FPS reales, ciclos por frame y porcentaje de velocidad emulada).
+#### Algoritmo del Motor de Reloj (`C64Clock` en `src/system/clock.ts`):
+Para garantizar que el emulador corra a velocidad idéntica tanto en monitores de 60 Hz como de 120 Hz o 144 Hz, implementamos un acumulador de tiempo delta:
+
+```mermaid
+flowchart TD
+    A["Evento requestAnimationFrame(timestamp)"] --> B["deltaMs = timestamp - lastTimestamp"]
+    B --> C{"¿deltaMs > 50 ms?"}
+    C -- "Sí (Pestaña en segundo plano)" --> D["deltaMs = 50 ms (Protección espiral de la muerte)"]
+    C -- "No" --> E["cyclesToAdd = (deltaMs / 1000) * 985,248"]
+    D --> E
+    E --> F["cycleDebt += cyclesToAdd"]
+    F --> G{"¿cycleDebt >= 1?"}
+    G -- "Sí" --> H["Ejecutar lote: cpu.step(), vic.step(), cia.step()"]
+    H --> I["cycleDebt -= ciclos_ejecutados"]
+    I --> G
+    G -- "No" --> J["Renderizar fotograma en Canvas"]
+    J --> K["Calcular métricas (FPS reales, % velocidad)"]
+```
 
 ---
 
-### 4. Arquitectura de Memoria y Banking de la CPU MOS 6510
-El chip 6510 integra un puerto de E/S de 6 bits mapeado en las direcciones `$0000` y `$0001`:
-- `$0000` (**DDR** - Data Direction Register): Determina la dirección de pines (1 = Salida, 0 = Entrada). Valor por defecto al encender: `$2F` (`%00101111`).
-- `$0001` (**PR** - Port Register): Controla las líneas de conmutación de la PLA. Valor por defecto al encender: `$37` (`%00110111`).
-  - Bit 0 (`LORAM`): Habilita BASIC ROM en `$A000-$BFFF`.
-  - Bit 1 (`HIRAM`): Habilita KERNAL ROM en `$E000-$FFFF`.
-  - Bit 2 (`CHAREN`): Habilita registros de E/S en `$D000-$DFFF` (o Character ROM si está en 0).
+### 4. Arquitectura de Memoria y Conmutación PLA
+La CPU MOS 6510 posee un bus de direcciones de 16 bits ($0000 - $FFFF = 64 KB). Sin embargo, la máquina dispone físicamente de 64 KB completos de RAM más 20 KB adicionales de memorias ROM y registros de E/S. El circuito integrado **PLA (Programmable Logic Array)** conmuta qué chip responde en cada dirección según el estado del puerto interno de la CPU en `$0000` y `$0001`:
 
-#### Tabla de Conmutación de la PLA Implementada:
-| LORAM | HIRAM | CHAREN | $A000-$BFFF (Lectura) | $D000-$DFFF (Lectura) | $E000-$FFFF (Lectura) | $D000-$DFFF (Escritura) |
-|:-----:|:-----:|:------:|:---------------------:|:---------------------:|:---------------------:|:-----------------------:|
-| 0     | 0     | x      | RAM                   | RAM                   | RAM                   | RAM                     |
-| 1     | 0     | 0      | RAM                   | CHAR ROM              | RAM                   | RAM                     |
-| 1     | 0     | 1      | RAM                   | I/O                   | RAM                   | I/O                     |
-| 0     | 1     | 0      | RAM                   | CHAR ROM              | KERNAL                | RAM                     |
-| 0     | 1     | 1      | RAM                   | I/O                   | KERNAL                | I/O                     |
-| 1     | 1     | 0      | BASIC ROM             | CHAR ROM              | KERNAL                | RAM                     |
-| **1** | **1** | **1**  | **BASIC ROM**         | **I/O**               | **KERNAL**            | **I/O** *(Arranque)*   |
+```
++---------------+-------------------------------------------------------------+
+| Rango Memoria | Componentes Mapeados (Según Configuración del PLA)          |
++---------------+-------------------------------------------------------------+
+| $0000 - $0001 | Registros DDR y Puerto I/O de la CPU 6510                   |
+| $0002 - $00FF | RAM física: Página Cero (Zero Page)                         |
+| $0100 - $01FF | RAM física: Pila del Sistema (Stack)                        |
+| $0200 - $9FFF | RAM física de usuario y vectores KERNAL                     |
+| $A000 - $BFFF | BASIC ROM (8 KB) ó RAM física oculta                        |
+| $C000 - $CFFF | RAM física libre                                            |
+| $D000 - $DFFF | Registros I/O (VIC-II, SID, CIAs, Color RAM) ó CHAR ROM ó RAM|
+| $E000 - $FFFF | KERNAL ROM (8 KB) ó RAM física oculta                       |
++---------------+-------------------------------------------------------------+
+```
 
-#### Regla Crítica de Hardware: Transparencia de Escritura en RAM
-En el C64 real, **las escrituras a `$A000-$BFFF` y `$E000-$FFFF` SIEMPRE escriben en la memoria RAM física oculta bajo la ROM**, sin alterar las ROMs. En `$D000-$DFFF`, si el espacio de E/S está activo, escribe en los periféricos; de lo contrario, escribe en la RAM física. Esta lógica ha sido codificada de manera estricta en [`MemoryBus.write()`](src/memory/memory_bus.ts).
+```mermaid
+flowchart LR
+    subgraph DireccionCPU ["Dirección de Memoria solicitada por CPU"]
+        A0["$A000 - $BFFF"]
+        D0["$D000 - $DFFF"]
+        E0["$E000 - $FFFF"]
+    end
+
+    subgraph PLA ["Lógica de Control PLA ($0001)"]
+        L["LORAM (Bit 0)"]
+        H["HIRAM (Bit 1)"]
+        C["CHAREN (Bit 2)"]
+    end
+
+    subgraph DestinoLectura ["Dispositivo que responde a la Lectura"]
+        BASIC["BASIC ROM (8 KB)"]
+        KERNAL["KERNAL ROM (8 KB)"]
+        CHARROM["Character ROM (4 KB)"]
+        IO["Periféricos I/O ($D000-$DFFF)"]
+        RAM["RAM Física Oculta Subyacente"]
+    end
+
+    A0 -->|"LORAM=1 y HIRAM=1"| BASIC
+    A0 -->|"LORAM=0 ó HIRAM=0"| RAM
+    E0 -->|"HIRAM=1"| KERNAL
+    E0 -->|"HIRAM=0"| RAM
+    D0 -->|"CHAREN=1 y (LORAM|HIRAM)"| IO
+    D0 -->|"CHAREN=0 y (LORAM|HIRAM)"| CHARROM
+    D0 -->|"LORAM=0 y HIRAM=0"| RAM
+```
+
+#### Regla de Oro del Hardware: Transparencia de Escritura en RAM
+En el C64 real, **toda escritura a rangos superpuestos con ROM ($A000-$BFFF y $E000-$FFFF) se escribe SIEMPRE en la memoria RAM subyacente**. Esto permite a programas y cargadores copiar código bajo la ROM del KERNAL o BASIC sin alterar la ROM activa.
 
 ---
 
 ## 📅 Módulo 2: CPU MOS 6510 (Duración de desarrollo: 4 días)
 
 ### 1. Resumen Ejecutivo
-Implementación completa del microprocesador **MOS 6510** (núcleo NMOS 6502). Se han implementado los 151 opcodes oficiales, todos los modos de direccionamiento de la arquitectura 6502, penalizaciones exactas de ciclos de reloj por cruce de límites de página y saltos condicionales, aritmética decimal BCD precisa para `ADC` y `SBC`, y el histórico error de hardware en la instrucción `JMP ($xxFF)`.
+Se implementó el microprocesador **MOS 6510** en `src/cpu/cpu6510.ts`. Se desarrollaron los **151 opcodes oficiales**, todos los modos de direccionamiento, el cálculo exacto de ciclos con penalizaciones de cruce de página, el bug histórico de `JMP ($xxFF)` y aritmética BCD para `ADC` y `SBC`.
 
-El microprocesador fue sometido y validado de punta a punta con la suite de pruebas oficial de **Klaus Dormann (6502 functional test)**, superando exitosamente los **30.6 millones de instrucciones** y **96.2 millones de ciclos** hasta alcanzar el bucle de éxito `$3469` en 0.73 segundos.
+```mermaid
+flowchart TD
+    subgraph CPU6510 ["Microprocesador MOS 6510"]
+        ALU["ALU (Aritmética Binaria y BCD)"]
+        subgraph Registros ["Registros Internos"]
+            A["A: Acumulador (8 bits)"]
+            X["X: Índice X (8 bits)"]
+            Y["Y: Índice Y (8 bits)"]
+            SP["SP: Puntero Pila ($0100-$01FF)"]
+            PC["PC: Contador de Programa (16 bits)"]
+            P["P: Registro de Estado (NV-BDIZC)"]
+        end
+        subgraph IOPort ["Puerto I/O Integrado"]
+            DDR["$0000: Data Direction Register"]
+            PR["$0001: Port Register (LORAM, HIRAM, CHAREN)"]
+        end
+    end
+
+    Bus["MemoryBus"] <-->|"Fetch Opcode / Lectura / Escritura"| CPU6510
+    IOPort -->|"Control de Líneas"| Bus
+```
 
 ---
 
-### 2. Registros y Banderas de Estado (`P`)
-- `A` (8 bits): Acumulador aritmético-lógico.
-- `X`, `Y` (8 bits): Registros de índice.
-- `SP` (8 bits): Puntero de pila (direcciona la página 1: `$0100 + SP`), decrementa al apilar y crece al desapilar.
-- `PC` (16 bits): Contador de programa.
-- `P` (8 bits): Registro de banderas (`NV-BDIZC`).
+### 2. Ciclo de Vida de Instrucción y Penalizaciones de Temporización
+Cada instrucción atraviesa un ciclo riguroso de resolución de dirección y consumo de ciclos:
+
+```mermaid
+stateDiagram-v2
+    [*] --> FetchOpcode: Leer opcode en PC++
+    FetchOpcode --> Decode: Decodificar Modo y Operación
+    Decode --> ResolveAddress: Calcular dirección efectiva
+    ResolveAddress --> CheckPageCross: ¿Modo indexado (Abs,X / Abs,Y / Ind,Y)?
+    CheckPageCross --> AddPenalty: Sí y cruzó límite de página ($xxFF -> $yy00)
+    CheckPageCross --> ExecuteOperation: No
+    AddPenalty --> ExecuteOperation: Añadir +1 ciclo de reloj
+    ExecuteOperation --> UpdateFlags: Actualizar banderas en P
+    UpdateFlags --> CheckInterrupts: ¿Hay IRQ o NMI pendiente?
+    CheckInterrupts --> FetchOpcode: Siguiente ciclo
+```
+
+#### Modos de Direccionamiento Soportados:
+1. **Implied / Accumulator:** Sin operando (`NOP`, `TAX`, `ASL A`).
+2. **Immediate (`#$nn`):** Operando en el siguiente byte.
+3. **Zero Page (`$nn`):** Direccionamiento rápido a `$0000 - $00FF`.
+4. **Zero Page, X (`$nn,X`) y Zero Page, Y (`$nn,Y`):** Envoltura circular en 8 bits.
+5. **Absolute (`$nnnn`):** Dirección de 16 bits.
+6. **Absolute, X (`$nnnn,X`) y Absolute, Y (`$nnnn,Y`):** 16 bits + índice (+1 ciclo en cruce de página para lecturas).
+7. **Indirect (`($nnnn)`):** Modelado con el **bug de hardware original del 6502**: si el puntero se encuentra en `$xxFF`, el byte alto se lee erróneamente de `$xx00` y no de `$xxFF + 1`.
+8. **Indexed Indirect (`($nn,X)`):** Puntero en página cero desplazado antes de resolver.
+9. **Indirect Indexed (`($nn),Y`):** Puntero en página cero resuelto y luego sumado con Y (+1 ciclo si cruza página).
+10. **Relative (`$nn`):** Saltos condicionales (`BNE`, `BEQ`, `BCC`, `BCS`, etc.): +1 ciclo si salta, +2 ciclos si además cruza página.
 
 ---
 
-### 3. Validación con la Suite de Pruebas de Klaus Dormann
-- **Archivo de prueba:** `tests/6502_functional_test.bin` (64 KB).
-- **Entorno de prueba:** Ejecutor en TypeScript [tests/run_klaus.ts](tests/run_klaus.ts).
-- **Vector de entrada:** `PC = $0400`.
-- **Condición de éxito:** Bucle infinito en `$3469` (`jmp $3469`).
-- **Resultado:** Superado en 0.71s (30,646,177 instrucciones, 96,241,381 ciclos).
+### 3. Validación con la Suite Oficial de Klaus Dormann
+Para certificar la fidelidad del microprocesador antes de conectar el resto de chips, se sometió al banco de pruebas oficial `tests/6502_functional_test.bin`:
+
+```text
+> npm run test:cpu
+
+🏁 Iniciando suite de pruebas funcionales de Klaus Dormann (6502)...
+   Punto de partida: PC=$0400 | Objetivo de éxito: PC=$3469
+
+🎉 ¡ÉXITO TOTAL! Test de Klaus Dormann SUPERADO.
+   Atrapado en el bucle de éxito: $3469
+   Instrucciones ejecutadas: 30.646.177
+   Ciclos de reloj de CPU: 96.241.381
+   Tiempo transcurrido: 0.73s
+```
+
+El procesador superó **30.6 millones de instrucciones** y **96.2 millones de ciclos** consecutivamente en 0.73 segundos, alcanzando el bucle de éxito en `$3469`.
 
 ---
 
 ## 📅 Módulo 3: Arranque a Pantalla de Texto y VIC-II Básico (Duración de desarrollo: 6 días)
 
 ### 1. Resumen Ejecutivo
-Se alcanzó el **primer gran hito de emulación completa**: el sistema arranca de manera 100% autónoma ejecutando las ROMs oficiales originales de Commodore, recorriendo todas las rutinas de inicialización de bajo nivel del KERNAL y BASIC V2, y dibujando en el lienzo Canvas de 384×272 la legendaria pantalla azul con el mensaje:
+Se logró el **primer hito fundamental**: arranque autónomo de las ROMs originales de Commodore (`basic.bin`, `kernal.bin`, `chargen.bin`), ejecutando las rutinas oficiales de inicialización del KERNAL y dibujando en el Canvas la pantalla de texto inicial clásica.
 
-```text
-    **** COMMODORE 64 BASIC V2 ****
- 64K RAM SYSTEM  38911 BASIC BYTES FREE
-READY.
+```mermaid
+sequenceDiagram
+    autonumber
+    participant CPU as MOS 6510 CPU
+    participant Bus as MemoryBus & PLA
+    participant KERNAL as KERNAL ROM ($E000)
+    participant CIA as CIA 1 ($DC00)
+    participant VIC as VIC-II ($D000)
+    participant RAM as RAM ($0400 / $D800)
+
+    CPU->>Bus: Vector RESET ($FFFC-$FFFD)
+    Bus-->>CPU: Salto a $FCE2
+    CPU->>KERNAL: Rutina IOINIT ($FDA3)
+    KERNAL->>CIA: Inicializar Timers y Puertos
+    KERNAL->>VIC: Configurar registros de video iniciales
+    CPU->>KERNAL: Rutina RAMTAS ($FD50)
+    KERNAL->>RAM: Limpiar Página 0, 2, 3
+    KERNAL->>RAM: Probar límite de RAM (38,911 bytes libres)
+    KERNAL->>RAM: Borrar pantalla ($0400 = $20) y Color RAM ($D800 = $0E)
+    CPU->>KERNAL: Rutina CINT ($FF5B)
+    KERNAL->>VIC: Fijar $D011=$1B, $D016=$08, $D018=$14, Borde=14, Fondo=6
+    CPU->>KERNAL: BASIC Cold Start ($E394)
+    KERNAL->>RAM: Imprimir banner 'COMMODORE 64 BASIC V2' y 'READY.'
+    VIC->>VIC: Renderizado Scanline a Scanline (Modo Texto 40x25)
 ```
 
 ---
 
-### 2. Gestión e Integración de ROMs
-Se descargaron e integraron las tres ROMs originales del sistema en `public/roms/`, verificando sus sumas de comprobación MD5:
-- **`basic.bin`** (8,192 bytes, MD5: `57AF4AE21D4B705C2991D98ED5C1F7B8`): Mapeada en `$A000 - $BFFF`.
-- **`kernal.bin`** (8,192 bytes, MD5: `39065497630802346BCE17963F13C092`): Mapeada en `$E000 - $FFFF` (KERNAL Rev 3).
-- **`chargen.bin`** (4,096 bytes, MD5: `12A4202F5331D45AF846AF6C58FBA946`): Mapeada en `$D000 - $DFFF` para la CPU y visible para el VIC-II en `$1000-$1FFF` de los bancos 0 y 2.
+### 2. Pipeline de Renderizado del VIC-II (MOS 6569)
+El VIC-II genera la imagen línea a línea componiendo bordes y caracteres:
 
-Se dotó a `C64System` de la función asíncrona `loadDefaultRoms()` para descargar e inyectar los binarios automáticamente en el bus de memoria al cargar la aplicación web.
+```
++-----------------------------------------------------------------------+
+|  BORDE SUPERIOR: Líneas 0 a 35 (Color $D020 - Azul Claro #14)         |
++-------+-------------------------------------------------------+-------+
+| BORDE |                                                       | BORDE |
+| IZQ.  | ÁREA ACTIVA: Líneas 36 a 235 (320 x 200 píxeles)      | DCHO. |
+| 32 px | 40 columnas x 25 filas de caracteres PETSCII          | 32 px |
+|       | Fondo ($D021 - Azul Oscuro #6)                        |       |
+|       | Texto ($D800 Color RAM - Azul Claro #14)              |       |
++-------+-------------------------------------------------------+-------+
+|  BORDE INFERIOR: Líneas 236 a 271 (Color $D020 - Azul Claro #14)      |
++-----------------------------------------------------------------------+
+```
 
----
+```mermaid
+flowchart LR
+    subgraph MemoriaVideo ["Fuentes de Datos del VIC-II"]
+        ScreenRAM["Screen RAM ($0400) - Código PETSCII"]
+        ColorRAM["Color RAM ($D800) - Color Frontal (4 bits)"]
+        CharROM["Character ROM ($1000) - Glifo 8x8 px"]
+    end
 
-### 3. Emulación de Modo Texto Estándar en el VIC-II (MOS 6569)
-Se implementó en [`src/vic/vic2.ts`](src/vic/vic2.ts) el modo de caracteres estándar (40 columnas × 25 filas):
-- **Decodificación de Punteros `$D018`:**
-  - Base de la matriz de pantalla (Screen RAM): `(regs[0x18] >> 4) * 0x0400` (por defecto `$0400` en banco 0).
-  - Base del generador de caracteres (Character Generator): `((regs[0x18] >> 1) & 0x07) * 0x0800` (por defecto `$1000` en banco 0, mapeado a Character ROM).
-- **Renderizado por Línea de Barrido (Scanline):**
-  - **Bordes:** Líneas verticales 0..35 y 236..271, más bordes laterales izquierdo (32 px) y derecho (32 px) renderizados con el color de borde `$D020` (Azul Claro #14).
-  - **Área activa (320 × 200 píxeles):** Para cada scanline dentro del área visible:
-    1. Se calcula la fila de caracteres: `charRow = Math.floor(y / 8)`.
-    2. Se calcula la línea dentro del glifo de 8×8 píxeles: `charY = y % 8`.
-    3. Para cada una de las 40 columnas:
-       - Se lee el código de pantalla PETSCII desde `Screen RAM [charRow * 40 + col]`.
-       - Se lee el color de primer plano desde la `Color RAM` física en `$D800` (`ioBus.colorRam[charRow * 40 + col] & 0x0F`).
-       - Se obtiene el byte del glifo desde la Character ROM: `glyphByte = readVic(charBase + code * 8 + charY)`.
-       - Cada bit en 1 se dibuja con el color de primer plano; cada bit en 0 se dibuja con el color de fondo `$D021` (Azul Oscuro #6).
-  - **Control de Registros:**
-    - `$D011` Bit 5 (`DEN` - Display Enable): Si está desactivado, el área activa se oculta con el color del borde.
-    - `$D011` Bit 6 (`RSEL` - Row Select): Modo de 24 o 25 filas (oculta 4 líneas superiores e inferiores si RSEL=0).
-    - `$D016` Bit 3 (`CSEL` - Column Select): Modo de 38 o 40 columnas.
+    subgraph PixelPipeline ["Pipeline de Píxeles por Caracter"]
+        Code["Código de Caracter (0-255)"]
+        Color["Color Nibble (0-15)"]
+        Glyph["Línea de 8 bits del Glifo (charY 0-7)"]
+        BitCheck{"¿Bit n == 1?"}
+        FrontColor["Píxel = PaletaPepto[ColorFrontal]"]
+        BackColor["Píxel = PaletaPepto[ColorFondo $D021]"]
+    end
 
----
-
-### 4. Temporizadores CIA 1 e Interrupciones IRQ
-Para permitir que las rutinas KERNAL completen el ciclo de inicialización y escaneo de teclado/cursor:
-- Se implementaron los contadores y latches de 16 bits para Timer A y Timer B en [`src/cia/cia1.ts`](src/cia/cia1.ts).
-- Se implementó el registro de control de interrupción (`ICR` / `IMR` en `$DC0D`), donde la lectura de `$DC0D` devuelve los eventos ocurridos y **borra automáticamente** la línea de interrupción `irqPending`.
-- Se corrigió el despacho de interrupción en la CPU 6510 para limpiar la señal de solicitud y evitar reentradas infinitas al retornar con `RTI`.
-
----
-
-### 5. Verificación de Arranque y Visualización en Terminal
-Se creó el script de prueba automatizado [tests/verify_screen_render.ts](tests/verify_screen_render.ts) ejecutable con `npm run test:boot`:
-
-```text
-> c64-web@0.1.0 test:boot
-> tsx tests/verify_screen_render.ts
-
-🚀 Arrancando emulación del C64...
-✅ Booteo finalizado. Extrayendo búfer de pantalla del VIC-II...
-
-================ VISUALIZACIÓN DE PANTALLA VIC-II ================
-Fila 00: |                                        |
-Fila 01: |    **** COMMODORE 64 BASIC V2 ****     |
-Fila 02: |                                        |
-Fila 03: | 64K RAM SYSTEM  38911 BASIC BYTES FREE |
-Fila 04: |                                        |
-Fila 05: |READY.                                  |
-Fila 06: |                                        |
-...
-==================================================================
-
-Color del borde: 14 (Azul Claro)
-Color del fondo: 6 (Azul Oscuro)
-FrameBuffer total de píxeles: 104448 píxeles (384x272)
+    ScreenRAM --> Code
+    ColorRAM --> Color
+    Code --> Glyph
+    CharROM --> Glyph
+    Glyph --> BitCheck
+    BitCheck -- "Sí" --> FrontColor
+    BitCheck -- "No" --> BackColor
 ```
 
 ---
@@ -206,61 +329,72 @@ FrameBuffer total de píxeles: 104448 píxeles (384x272)
 ## 📅 Módulo 4: Teclado y E/S (CIA 1) y BASIC V2 Interactivo (Duración de desarrollo: 19 días)
 
 ### 1. Resumen Ejecutivo
-Se alcanzó el **segundo gran hito fundamental del proyecto**: la interactividad completa entre el usuario y el intérprete de BASIC V2 de la máquina original. Ahora es posible escribir programas en BASIC, pulsar `RUN` y obtener la ejecución inmediata por parte del KERNAL.
+Se completó el **segundo hito fundamental del emulador**: interactividad completa entre el teclado del usuario y el intérprete interactivo de BASIC V2. Ahora es posible teclear instrucciones en BASIC, pulsar `RUN` y obtener ejecución fidedigna con respuesta del KERNAL.
 
 ---
 
-### 2. Matriz de Teclado 8×8 Oficial (CIA 1 $DC00 / $DC01)
-El teclado físico del Commodore 64 se organiza en una matriz de 64 posiciones conectada a los puertos de la CIA 1:
-- **Port A (`$DC00`):** Conduce las 8 líneas de columna (bits 0 a 7 en bajo activo).
-- **Port B (`$DC01`):** Lee las 8 líneas de fila (bits 0 a 7 en bajo activo; 0 = tecla pulsada).
+### 2. Circuito de la Matriz de Teclado 8×8 (CIA 1 $DC00 / $DC01)
+El teclado físico del C64 no envía códigos ASCII directamente, sino que se organiza en una matriz de cruces eléctricos leída dinámicamente por la CIA 1:
 
-La indexación se verificó byte por byte contra la tabla oficial de decodificación del KERNAL en `$EB81` (`index = col * 8 + row`):
-- **Columna 0:** DEL, RETURN, CRSR_RT, F7, F1, F3, F5, CRSR_DN
-- **Columna 1:** 3, W, A, 4, Z, S, E, Left Shift
-- **Columna 2:** 5, R, D, 6, C, F, T, X
-- **Columna 3:** 7, Y, G, 8, B, H, U, V
-- **Columna 4:** 9, I, J, 0, M, K, O, N
-- **Columna 5:** +, P, L, -, ., :, @, ,
-- **Columna 6:** £, *, ;, HOME, Right Shift, =, ↑, /
-- **Columna 7:** 1, ←, CTRL, 2, SPACE, COMMODORE (C=), Q, RUN/STOP
+```
+        Col 0 ($FE)  Col 1 ($FD)  Col 2 ($FB)  Col 3 ($F7)  Col 4 ($EF)  Col 5 ($DF)  Col 6 ($BF)  Col 7 ($7F)
+Row 0:  DEL          3            5            7            9            +            POUND        1
+Row 1:  RETURN       W            R            Y            I            P            *            LEFT-ARROW
+Row 2:  CRSR-RT      A            D            G            J            L            ;            CTRL
+Row 3:  F7           4            6            8            0            -            HOME         2
+Row 4:  F1           Z            C            B            M            .            R-SHIFT      SPACE
+Row 5:  F3           S            F            H            K            :            =            COMMODORE (C=)
+Row 6:  F5           E            T            U            O            @            UP-ARROW     Q
+Row 7:  CRSR-DN      L-SHIFT      X            V            N            ,            /            RUN/STOP
+```
 
-En [`src/cia/cia1.ts`](src/cia/cia1.ts) se implementó soporte de escaneo bidireccional, garantizando que el escaneo funcione tanto si el software escribe en Port A y lee Port B, como si escribe en Port B y lee Port A.
+```mermaid
+flowchart TD
+    subgraph EscaneoTeclado ["Circuito CIA 1 ($DC00 / $DC01)"]
+        PortA["Puerto A ($DC00): Selecciona Columna (0 activo)"]
+        Keys["Matriz 8x8 de Contactos de Teclas"]
+        PortB["Puerto B ($DC01): Lee Filas presionadas (0 activo)"]
+    end
 
----
-
-### 3. Gestor de Teclado para Navegadores Modernos (`KeyboardManager`)
-En [`src/io/keyboard.ts`](src/io/keyboard.ts) se implementó el traductor de eventos de teclado de PC/Web al circuito del C64:
-- **Mapeo Posicional de Controles:**
-  - `Enter` $\rightarrow$ `RETURN`
-  - `Backspace` $\rightarrow$ `DEL`
-  - `Space` $\rightarrow$ `SPACE`
-  - `Escape` $\rightarrow$ `RUN/STOP`
-  - `ControlLeft` / `Tab` $\rightarrow$ Tecla `COMMODORE (C=)`
-  - `ControlRight` $\rightarrow$ `CTRL`
-  - `ShiftLeft` / `ShiftRight` $\rightarrow$ `Left Shift` / `Right Shift`
-  - `CapsLock` $\rightarrow$ `SHIFT LOCK` (mantiene activo el Shift lógico)
-  - `PageUp` / `F12` $\rightarrow$ `RESTORE` (provoca una interrupción `NMI` directa en la CPU)
-  - Teclas de cursor (`Flechas`) $\rightarrow$ Mapeadas a `CRSR_DN` y `CRSR_RT` con Shift invertido cuando corresponde.
-- **Mapeo Simbólico Inteligente:**
-  - Caracteres como comillas `"`, signos de puntuación `:`, `;`, `=`, operaciones matemáticas `+`, `-`, `*`, `/` activan automáticamente las combinaciones correctas de Shift de C64 (por ejemplo, comillas `"` activa `Shift + 2` en la matriz de Commodore).
+    PortA -->|"Escribe máscara (ej: $FE Col 0)"| Keys
+    Keys -->|"Líneas de retorno"| PortB
+    PortB -->|"Lectura estable"| KERNAL_SCNKEY["Rutina SCNKEY ($FF9F)"]
+```
 
 ---
 
-### 4. Bucle KERNAL e Interrupción de 50 Hz
-El KERNAL utiliza el Timer A de la CIA 1 para generar interrupciones a ~50 Hz. En cada ciclo de interrupción:
-1. Se atiende el parpadeo del cursor.
-2. Se ejecuta la subrutina `SCNKEY` (`$FF9F` / `$E5B4`), que sondea `$DC00` y `$DC01` y almacena los caracteres PETSCII en el búfer de teclado (`$0277`).
-3. El bucle de entrada de BASIC (`$E5CD`) extrae los caracteres con `GETIN` (`$FFE4`) y los muestra en pantalla con `CHROUT` (`$FFD2`).
+### 3. Cadena de Interrupciones de 50 Hz y Bucle del Cursor
+El sistema utiliza el Timer A de la CIA 1 para sincronizar el parpadeo del cursor y la lectura de teclas:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant TimerA as CIA 1 Timer A
+    participant CPU as CPU MOS 6510
+    participant ISR as KERNAL IRQ ($EA31)
+    participant SCNKEY as SCNKEY ($FF9F)
+    participant Buf as Búfer Teclado ($0277)
+    participant BASIC as Bucle BASIC ($E5CD)
+    participant VIC as Pantalla VIC-II
+
+    TimerA->>CPU: Señal IRQ (Underflow ~50 Hz)
+    CPU->>ISR: Salto a Vector IRQ
+    ISR->>VIC: Parpadear Cursor (Invertir caracter cada 20 jiffies)
+    ISR->>SCNKEY: Sondear Matriz $DC00 / $DC01
+    SCNKEY->>Buf: Depositar código PETSCII en búfer
+    ISR->>TimerA: Leer $DC0D (Acknowledge IRQ)
+    ISR-->>CPU: RTI (Retorno de interrupción)
+    BASIC->>Buf: GETIN ($FFE4) extrae caracter
+    BASIC->>VIC: CHROUT ($FFD2) dibuja caracter en pantalla
+```
 
 ---
 
-### 5. Verificación de Ejecución de Programa BASIC (Segundo Hito)
-Se implementó la prueba automatizada [tests/test_keyboard_basic.ts](tests/test_keyboard_basic.ts) ejecutable con `npm run test:keyboard`:
+### 4. Verificación de Ejecución de Código BASIC (Segundo Hito)
+Mediante el script automatizado `tests/test_keyboard_basic.ts`, se inyectaron las pulsaciones de un programa completo y su ejecución:
 
 ```text
-> c64-web@0.1.0 test:keyboard
-> tsx tests/test_keyboard_basic.ts
+> npm run test:keyboard
 
 🚀 1. Booteando C64 hasta llegar a READY...
 ⌨️  2. Escribiendo programa: 10 PRINT "HOLA"...
@@ -282,4 +416,13 @@ Fila 10: [READY.                                  ]
    "HOLA" y "READY." se encuentran correctamente en pantalla.
 ```
 
-El entorno web (`npm run dev`) ahora permite hacer clic en el canvas y escribir en tiempo real cualquier programa en BASIC V2 con respuesta inmediata del cursor y el sistema.
+---
+
+### 5. Resumen de Hitos y Estado Actual del Proyecto
+
+| Módulo | Componente Clave | Duración | Estado | Hito Verificado |
+| :--- | :--- | :---: | :---: | :--- |
+| **Módulo 1** | Cimientos, PLA Banking, Temporización PAL | 17 días | ✅ Completado | Bus de memoria, bucle 50.12 Hz, Canvas 384x272 |
+| **Módulo 2** | CPU MOS 6510 (151 Opcodes oficiales, BCD) | 4 días | ✅ Completado | Test Klaus Dormann 100% superado (96M ciclos) |
+| **Módulo 3** | KERNAL/BASIC Boot, VIC-II Texto 40x25 | 6 días | ✅ Completado | **Primer Hito:** Pantalla de arranque y READY. |
+| **Módulo 4** | Matriz Teclado CIA 1, Timers 50Hz, Web Keys | 19 días | ✅ Completado | **Segundo Hito:** Escritura y ejecución de BASIC |
